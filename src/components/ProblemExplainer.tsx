@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useCallback } from "react";
 import {
   Sparkles,
   Code2,
@@ -17,10 +17,16 @@ import {
   HelpCircle,
   Cpu,
   Terminal,
+  Bookmark,
+  BookmarkCheck,
+  History,
+  Trash2,
 } from "lucide-react";
+import type { User } from "@supabase/supabase-js";
 import { useI18n } from "@/lib/I18nProvider";
+import { supabase } from "@/lib/supabaseClient";
 
-interface StepExplanation {
+export interface StepExplanation {
   stepNumber: number;
   titleUz: string;
   titleEn: string;
@@ -30,7 +36,7 @@ interface StepExplanation {
   activeLine?: number;
 }
 
-interface ProblemAnalysisResponse {
+export interface ProblemAnalysisResponse {
   algorithmName: string;
   algorithmCategory: string;
   approachSummaryUz: string;
@@ -49,6 +55,14 @@ interface ProblemAnalysisResponse {
     python: string;
     cpp: string;
   };
+}
+
+interface SavedProblemItem {
+  id: string;
+  title: string;
+  mode: "problem" | "code";
+  createdAt: string;
+  analysis: ProblemAnalysisResponse;
 }
 
 const PRESET_EXAMPLES = [
@@ -84,6 +98,9 @@ const PRESET_EXAMPLES = [
 export default function ProblemExplainer() {
   const { lang } = useI18n();
 
+  // Current user state from Supabase
+  const [user, setUser] = useState<User | null>(null);
+
   // Mode and form states
   const [mode, setMode] = useState<"problem" | "code">("problem");
   const [title, setTitle] = useState<string>("Two Sum: Target Pair Finder");
@@ -104,12 +121,76 @@ export default function ProblemExplainer() {
   const [activeCodeTab, setActiveCodeTab] = useState<"python" | "cpp">("python");
   const [isCopied, setIsCopied] = useState<boolean>(false);
 
+  // Saved Problems History
+  const [savedHistory, setSavedHistory] = useState<SavedProblemItem[]>([]);
+  const [isSaved, setIsSaved] = useState<boolean>(false);
+  const [showHistory, setShowHistory] = useState<boolean>(false);
+
+  // Track auth state
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  // Load history from Supabase / localStorage
+  const loadSavedHistory = useCallback(async () => {
+    if (typeof window === "undefined") return;
+
+    // Check localStorage first
+    try {
+      const localData = localStorage.getItem("algouz_saved_problems");
+      if (localData) {
+        setSavedHistory(JSON.parse(localData));
+      }
+    } catch {
+      // ignore
+    }
+
+    // If user is authenticated, query Supabase user_problems table
+    if (user) {
+      try {
+        const { data, error } = await supabase
+          .from("user_problems")
+          .select("*")
+          .eq("user_id", user.id)
+          .order("created_at", { ascending: false });
+
+        if (!error && data && data.length > 0) {
+          const formatted: SavedProblemItem[] = data.map((d) => ({
+            id: d.id,
+            title: d.title,
+            mode: d.mode || "problem",
+            createdAt: d.created_at,
+            analysis: d.analysis_json,
+          }));
+          setSavedHistory(formatted);
+        }
+      } catch {
+        // Fallback to local storage
+      }
+    }
+  }, [user]);
+
+  useEffect(() => {
+    loadSavedHistory();
+  }, [loadSavedHistory]);
+
   const handleApplyPreset = (ex: (typeof PRESET_EXAMPLES)[0]) => {
     setMode(ex.mode);
     setTitle(ex.title);
     setContent(ex.content);
     setTestCase(ex.testCase);
     setErrorMsg(null);
+    setIsSaved(false);
   };
 
   const handleAnalyze = async (e?: React.FormEvent) => {
@@ -125,6 +206,7 @@ export default function ProblemExplainer() {
 
     setIsLoading(true);
     setErrorMsg(null);
+    setIsSaved(false);
 
     try {
       const res = await fetch("/api/explain-problem", {
@@ -146,6 +228,69 @@ export default function ProblemExplainer() {
       setErrorMsg(msg);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Save to Supabase and LocalStorage
+  const handleSaveProblem = async () => {
+    if (!result) return;
+
+    const newItem: SavedProblemItem = {
+      id: `${Date.now()}`,
+      title: title || result.algorithmName,
+      mode,
+      createdAt: new Date().toISOString(),
+      analysis: result,
+    };
+
+    // 1. Save to LocalStorage
+    try {
+      const updated = [newItem, ...savedHistory.filter((i) => i.title !== newItem.title)].slice(0, 20);
+      setSavedHistory(updated);
+      localStorage.setItem("algouz_saved_problems", JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+
+    // 2. Save to Supabase user_problems table if authenticated
+    if (user) {
+      try {
+        await supabase.from("user_problems").insert([
+          {
+            user_id: user.id,
+            title: newItem.title,
+            mode: newItem.mode,
+            content: content,
+            test_case: testCase,
+            algorithm_name: result.algorithmName,
+            analysis_json: result,
+          },
+        ]);
+      } catch {
+        // Fallback already saved locally
+      }
+    }
+
+    setIsSaved(true);
+    setTimeout(() => setIsSaved(false), 3000);
+  };
+
+  const handleLoadSavedItem = (item: SavedProblemItem) => {
+    setTitle(item.title);
+    setMode(item.mode);
+    setResult(item.analysis);
+    setActiveStepIdx(0);
+    setShowHistory(false);
+  };
+
+  const handleDeleteSavedItem = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const updated = savedHistory.filter((i) => i.id !== id);
+    setSavedHistory(updated);
+    try {
+      localStorage.setItem("algouz_saved_problems", JSON.stringify(updated));
+    } catch {
+      // ignore
     }
   };
 
@@ -188,22 +333,81 @@ export default function ProblemExplainer() {
           </div>
         </div>
 
-        {/* Quick Presets */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-mono text-slate-500">
-            {lang === "uz" ? "Namunalar:" : "Examples:"}
-          </span>
-          {PRESET_EXAMPLES.map((ex, idx) => (
+        {/* Action Controls: Presets and History Toggle */}
+        <div className="flex items-center gap-2.5 flex-wrap">
+          {savedHistory.length > 0 && (
             <button
-              key={idx}
-              onClick={() => handleApplyPreset(ex)}
-              className="px-2.5 py-1 rounded-lg text-[11px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-500 transition-colors"
+              onClick={() => setShowHistory((h) => !h)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-zinc-700 bg-zinc-800 text-xs font-mono text-slate-300 hover:text-white transition-colors"
             >
-              {idx === 0 ? "Two Sum" : idx === 1 ? "Binary Search" : "Reverse"}
+              <History className="w-3.5 h-3.5 text-indigo-400" />
+              <span>{lang === "uz" ? "Tarix" : "History"}</span>
+              <span className="w-4 h-4 rounded-full bg-indigo-600 text-[10px] text-white flex items-center justify-center font-bold">
+                {savedHistory.length}
+              </span>
             </button>
-          ))}
+          )}
+
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-mono text-slate-500">
+              {lang === "uz" ? "Namunalar:" : "Presets:"}
+            </span>
+            {PRESET_EXAMPLES.map((ex, idx) => (
+              <button
+                key={idx}
+                onClick={() => handleApplyPreset(ex)}
+                className="px-2.5 py-1 rounded-lg text-[11px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-500 transition-colors"
+              >
+                {idx === 0 ? "Two Sum" : idx === 1 ? "Binary Search" : "Reverse"}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
+
+      {/* ── Saved History Drawer (Collapsible) ─────────────────────────── */}
+      {showHistory && savedHistory.length > 0 && (
+        <div className="p-4 rounded-2xl bg-zinc-950 border border-zinc-800 shadow-2xl flex flex-col gap-3 animate-in fade-in duration-150">
+          <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+            <span className="text-xs font-mono font-semibold uppercase text-slate-300 flex items-center gap-2">
+              <History className="w-4 h-4 text-indigo-400" />
+              {lang === "uz" ? "Saqlangan Masalalar Tarixi" : "Saved Problem History"}
+            </span>
+            <button
+              onClick={() => setShowHistory(false)}
+              className="text-xs font-mono text-slate-400 hover:text-white"
+            >
+              {lang === "uz" ? "Yopish" : "Close"}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 max-h-48 overflow-y-auto">
+            {savedHistory.map((item) => (
+              <div
+                key={item.id}
+                onClick={() => handleLoadSavedItem(item)}
+                className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-indigo-500/50 cursor-pointer flex items-start justify-between group transition-all"
+              >
+                <div className="flex flex-col gap-1 overflow-hidden pr-2">
+                  <span className="text-xs font-mono font-semibold text-white truncate">
+                    {item.title}
+                  </span>
+                  <span className="text-[10px] font-mono text-indigo-400">
+                    {item.analysis.algorithmName.split("(")[0]}
+                  </span>
+                </div>
+                <button
+                  onClick={(e) => handleDeleteSavedItem(item.id, e)}
+                  title="Delete"
+                  className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-rose-400 transition-opacity"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* ── Input Section: Two Modes ────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -343,13 +547,13 @@ export default function ProblemExplainer() {
             <div className="flex items-center gap-2 text-indigo-400">
               <Cpu className="w-4 h-4" />
               <h3 className="text-xs font-mono font-semibold uppercase text-slate-200">
-                {lang === "uz" ? "AI Explainer Qanday Ishlaydi?" : "How AI Explainer Works"}
+                {lang === "uz" ? "AI Explainer & Bulutli Xotira" : "AI Explainer & Cloud Sync"}
               </h3>
             </div>
             <p className="text-xs text-slate-300 leading-relaxed font-sans">
               {lang === "uz"
-                ? "Tizim masalani O(N) murakkablik qonuniyatlariga ko'ra dekompozitsiya qiladi. Natijada sizga aniq bosqichma-bosqich diskret holatlar (State Snapshots), Big-O asimptotik bahosi va toza Python hamda C++ yechimlari taqdim etiladi."
-                : "The system decomposes the problem into discrete step snapshots, tracks variables and memory pointers, analyzes asymptotic Big-O runtime, and provides clean reference implementations."}
+                ? "Tizim masalani O(N) murakkablik qonuniyatlariga ko'ra dekompozitsiya qiladi. Natijada sizga aniq bosqichma-bosqich diskret holatlar (State Snapshots), Big-O asimptotik bahosi va toza Python hamda C++ yechimlari taqdim etiladi. Tizimga kirsangiz, tahlillar Supabase bulutida saqlanadi."
+                : "The system decomposes the problem into discrete step snapshots, tracks variables and memory pointers, analyzes asymptotic Big-O runtime, and provides clean reference implementations. Authenticated students can save explanations to Supabase."}
             </p>
 
             <div className="grid grid-cols-2 gap-2.5 pt-2">
@@ -363,10 +567,10 @@ export default function ProblemExplainer() {
               </div>
               <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col gap-1">
                 <span className="text-[10px] font-mono text-amber-400 uppercase font-semibold">
-                  Dual-Language
+                  Supabase Ready
                 </span>
                 <span className="text-xs text-slate-400">
-                  {lang === "uz" ? "O'zbek va ingliz tillarida tushuntirish" : "Bilingual explanations in Uzbek & English"}
+                  {lang === "uz" ? "user_problems jadvaliga sinxronizatsiya" : "Syncs to user_problems with offline fallback"}
                 </span>
               </div>
             </div>
@@ -400,9 +604,31 @@ export default function ProblemExplainer() {
                 </span>
               </div>
 
-              <span className="text-[11px] font-mono px-3 py-1 rounded-full bg-indigo-600/30 text-indigo-300 border border-indigo-500/40">
-                {result.algorithmCategory}
-              </span>
+              <div className="flex items-center gap-2.5">
+                <span className="text-[11px] font-mono px-3 py-1 rounded-full bg-indigo-600/30 text-indigo-300 border border-indigo-500/40">
+                  {result.algorithmCategory}
+                </span>
+
+                {/* Save Explanation Button */}
+                <button
+                  onClick={handleSaveProblem}
+                  className="flex items-center gap-1.5 px-3 py-1 rounded-lg border border-zinc-700 bg-zinc-800 hover:bg-zinc-700 text-xs font-mono text-slate-200 transition-colors"
+                >
+                  {isSaved ? (
+                    <>
+                      <BookmarkCheck className="w-3.5 h-3.5 text-emerald-400" />
+                      <span className="text-emerald-400 font-semibold">
+                        {lang === "uz" ? "Saqlandi!" : "Saved!"}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Bookmark className="w-3.5 h-3.5 text-amber-400" />
+                      <span>{lang === "uz" ? "Saqlash" : "Save Explanation"}</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
             <p className="text-sm text-slate-200 leading-relaxed font-sans">
