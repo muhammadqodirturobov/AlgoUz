@@ -533,8 +533,9 @@ export default function SortingVisualizer() {
   const [isCodePanelOpen, setIsCodePanelOpen] = useState<boolean>(true);
 
   // Custom Array Input state
-  const [customInput, setCustomInput] = useState<string>("");
+  const [customInput, setCustomInput] = useState<string>(" ");
   const [inputError, setInputError] = useState<string | null>(null);
+  const [selectedPreset, setSelectedPreset] = useState<string>("random");
 
   // Playback state
   const [stepIdx, setStepIdx] = useState<number>(0);
@@ -546,6 +547,7 @@ export default function SortingVisualizer() {
   // Mount effect to randomize array strictly on client
   useEffect(() => {
     setSourceArray(generateRandom(20));
+    setCustomInput("");
   }, []);
 
   // Precomputed steps
@@ -660,6 +662,7 @@ export default function SortingVisualizer() {
     setIsPlaying(false);
     setStepIdx(0);
     setSourceArray(clamped);
+    setSelectedPreset("custom");
     setCustomInput("");
   };
 
@@ -669,6 +672,7 @@ export default function SortingVisualizer() {
     setIsPlaying(false);
     setStepIdx(0);
     setInputError(null);
+    setSelectedPreset(preset);
     const n = sourceArray.length || 20;
 
     if (preset === "random") setSourceArray(generateRandom(n));
@@ -983,34 +987,27 @@ export default function SortingVisualizer() {
               </span>
 
               {/* Presets dropdown */}
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span className="text-[11px] font-mono text-slate-500">
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono text-slate-400">
                   {lang === "uz" ? "Shablonlar:" : "Presets:"}
                 </span>
-                <button
-                  onClick={() => handlePresetSelect("random")}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-600 transition-colors"
+                <select
+                  value={selectedPreset}
+                  onChange={(e) =>
+                    handlePresetSelect(
+                      e.target.value as "random" | "reversed" | "nearly" | "few"
+                    )
+                  }
+                  className="px-3 py-1.5 rounded-lg text-xs font-mono bg-zinc-950 border border-zinc-700 text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 cursor-pointer"
                 >
-                  Randomized
-                </button>
-                <button
-                  onClick={() => handlePresetSelect("reversed")}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-600 transition-colors"
-                >
-                  Worst Case
-                </button>
-                <button
-                  onClick={() => handlePresetSelect("nearly")}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-600 transition-colors"
-                >
-                  Nearly Sorted
-                </button>
-                <button
-                  onClick={() => handlePresetSelect("few")}
-                  className="px-2.5 py-1 rounded-lg text-[11px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-600 transition-colors"
-                >
-                  Few Unique
-                </button>
+                  <option value="random">Randomized</option>
+                  <option value="reversed">Worst Case (Reversed)</option>
+                  <option value="nearly">Nearly Sorted</option>
+                  <option value="few">Few Unique</option>
+                  {selectedPreset === "custom" && (
+                    <option value="custom">Custom Array</option>
+                  )}
+                </select>
               </div>
             </div>
 
