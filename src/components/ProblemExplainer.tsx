@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { useI18n } from "@/lib/I18nProvider";
-import { supabase } from "@/lib/supabaseClient";
+import { supabase, subscribeToAuth } from "@/lib/supabaseClient";
 
 export interface StepExplanation {
   stepNumber: number;
@@ -126,37 +126,33 @@ export default function ProblemExplainer() {
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [showHistory, setShowHistory] = useState<boolean>(false);
 
-  // Track auth state
+  // Track auth state with unified listener
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
+    const unsubscribe = subscribeToAuth((currentUser) => {
+      setUser(currentUser);
     });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, []);
 
   // Load history from Supabase / localStorage
   const loadSavedHistory = useCallback(async () => {
     if (typeof window === "undefined") return;
 
+    let items: SavedProblemItem[] = [];
+
     // Check localStorage first
     try {
       const localData = localStorage.getItem("algouz_saved_problems");
       if (localData) {
-        setSavedHistory(JSON.parse(localData));
+        items = JSON.parse(localData);
+        setSavedHistory(items);
       }
     } catch {
       // ignore
     }
 
     // If user is authenticated, query Supabase user_problems table
-    if (user) {
+    if (user && !user.user_metadata?.is_local_bypass) {
       try {
         const { data, error } = await supabase
           .from("user_problems")
@@ -172,7 +168,11 @@ export default function ProblemExplainer() {
             createdAt: d.created_at,
             analysis: d.analysis_json,
           }));
-          setSavedHistory(formatted);
+          const combined = [
+            ...formatted,
+            ...items.filter((i) => !formatted.some((f) => f.title === i.title)),
+          ];
+          setSavedHistory(combined);
         }
       } catch {
         // Fallback to local storage

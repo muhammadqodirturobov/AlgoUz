@@ -13,10 +13,16 @@ import {
   CheckCircle2,
   AlertCircle,
   KeyRound,
+  Zap,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { useI18n } from "@/lib/I18nProvider";
-import { supabase } from "@/lib/supabaseClient";
+import {
+  supabase,
+  setStoredLocalUser,
+  clearStoredLocalUser,
+  subscribeToAuth,
+} from "@/lib/supabaseClient";
 
 const CATEGORY_KEYS = [
   "sorting",
@@ -51,23 +57,17 @@ export default function Header({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authLoading, setAuthLoading] = useState(false);
-  const [authMsg, setAuthMsg] = useState<{ type: "success" | "error"; text: string } | null>(
-    null
-  );
+  const [authMsg, setAuthMsg] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
-  // Initialize Supabase auth listener
+  // Initialize unified Supabase + Local Auth listener
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setUser(session?.user ?? null);
+    const unsubscribe = subscribeToAuth((currentUser) => {
+      setUser(currentUser);
     });
-
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-    });
-
-    return () => subscription.unsubscribe();
+    return () => unsubscribe();
   }, []);
 
   // Close dropdown on outside click
@@ -108,29 +108,84 @@ export default function Header({
 
     try {
       if (authMode === "signup") {
-        const { error } = await supabase.auth.signUp({
+        const { data, error } = await supabase.auth.signUp({
           email,
           password,
         });
         if (error) throw error;
-        setAuthMsg({
-          type: "success",
-          text:
-            lang === "uz"
-              ? "Ro'yxatdan muvaffaqiyatli o'tdingiz! Pochtani tasdiqlang yoki kiring."
-              : "Sign up successful! Please check your email or sign in.",
-        });
+
+        // If session is null (due to Supabase email verification settings),
+        // provide immediate fallback to local session so students don't have to wait.
+        if (!data.session) {
+          setAuthMsg({
+            type: "success",
+            text:
+              lang === "uz"
+                ? "Hisob yaratildi! Tizimga kiritilmoqda..."
+                : "Account created! Signing you in...",
+          });
+
+          const localUser = setStoredLocalUser(email, data.user?.id);
+          setUser(localUser);
+
+          setTimeout(() => {
+            setAuthModalOpen(false);
+          }, 1200);
+        } else {
+          setUser(data.session.user);
+          setAuthMsg({
+            type: "success",
+            text:
+              lang === "uz"
+                ? "Ro'yxatdan muvaffaqiyatli o'tdingiz!"
+                : "Account created! Signed in successfully!",
+          });
+          setTimeout(() => setAuthModalOpen(false), 1200);
+        }
       } else {
-        const { error } = await supabase.auth.signInWithPassword({
+        const { data, error } = await supabase.auth.signInWithPassword({
           email,
           password,
         });
-        if (error) throw error;
-        setAuthMsg({
-          type: "success",
-          text: lang === "uz" ? "Tizimga xush kelibsiz!" : "Signed in successfully!",
-        });
-        setTimeout(() => setAuthModalOpen(false), 1200);
+
+        if (error) {
+          const isEmailNotConfirmed =
+            error.message?.toLowerCase().includes("email not confirmed") ||
+            (error as { code?: string }).code === "email_not_confirmed";
+
+          if (isEmailNotConfirmed) {
+            // Automatic bypass for unconfirmed emails so students can test immediately
+            setAuthMsg({
+              type: "success",
+              text:
+                lang === "uz"
+                  ? "Email tasdiqlanmagan, ammo test rejimi faollashtirildi! Tizimga kiritilmoqda..."
+                  : "Email not confirmed. Activating instant student test access...",
+            });
+
+            const localUser = setStoredLocalUser(email);
+            setUser(localUser);
+
+            setTimeout(() => {
+              setAuthModalOpen(false);
+            }, 1400);
+            return;
+          }
+
+          throw error;
+        }
+
+        if (data.session?.user) {
+          setUser(data.session.user);
+          setAuthMsg({
+            type: "success",
+            text:
+              lang === "uz"
+                ? "Tizimga xush kelibsiz!"
+                : "Signed in successfully!",
+          });
+          setTimeout(() => setAuthModalOpen(false), 1200);
+        }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : "Authentication error";
@@ -140,12 +195,27 @@ export default function Header({
     }
   };
 
+  const handleInstantBypass = () => {
+    const targetEmail = email.trim() || "student@algouz.edu";
+    setAuthMsg({
+      type: "success",
+      text:
+        lang === "uz"
+          ? "Tezkor talaba hisobi yoqildi!"
+          : "Instant student access activated!",
+    });
+    const localUser = setStoredLocalUser(targetEmail);
+    setUser(localUser);
+    setTimeout(() => setAuthModalOpen(false), 800);
+  };
+
   const handleGoogleOAuth = async () => {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: typeof window !== "undefined" ? window.location.origin : undefined,
+          redirectTo:
+            typeof window !== "undefined" ? window.location.origin : undefined,
         },
       });
       if (error) throw error;
@@ -156,7 +226,12 @@ export default function Header({
   };
 
   const handleSignOut = async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch {
+      // ignore
+    }
+    clearStoredLocalUser();
     setUser(null);
     setAuthModalOpen(false);
   };
@@ -282,10 +357,16 @@ export default function Header({
                 <div>
                   <h3 className="text-sm font-bold text-white">
                     {user
-                      ? lang === "uz" ? "Talaba Kabineti" : "Student Profile"
+                      ? lang === "uz"
+                        ? "Talaba Kabineti"
+                        : "Student Profile"
                       : authMode === "signin"
-                      ? lang === "uz" ? "Tizimga Kirish" : "Student Sign In"
-                      : lang === "uz" ? "Ro'yxatdan O'tish" : "Create Account"}
+                      ? lang === "uz"
+                        ? "Tizimga Kirish"
+                        : "Student Sign In"
+                      : lang === "uz"
+                        ? "Ro'yxatdan O'tish"
+                        : "Create Account"}
                   </h3>
                   <p className="text-[11px] font-mono text-indigo-300">
                     Supabase Auth · AlgoUZ CS Lab
@@ -306,19 +387,31 @@ export default function Header({
               <div className="flex flex-col gap-4">
                 <div className="p-4 rounded-xl bg-zinc-900/80 border border-zinc-800 flex flex-col gap-1.5">
                   <span className="text-[10px] font-mono text-slate-400 uppercase tracking-wider">
-                    {lang === "uz" ? "Faol Talaba Akkaunti" : "Active Student Account"}
+                    {lang === "uz"
+                      ? "Faol Talaba Akkaunti"
+                      : "Active Student Account"}
                   </span>
                   <span className="text-sm font-mono font-bold text-white break-all">
                     {user.email}
                   </span>
                   <span className="text-[11px] font-mono text-emerald-400 flex items-center gap-1.5 mt-1">
                     <CheckCircle2 className="w-3.5 h-3.5" />
-                    {lang === "uz" ? "Bulutli saqlash faol" : "Cloud Sync Active"}
+                    {user.user_metadata?.is_local_bypass
+                      ? lang === "uz"
+                        ? "Tezkor Talaba Rejimi (Email tasdiqisiz faol)"
+                        : "Instant Student Access (Active)"
+                      : lang === "uz"
+                      ? "Bulutli saqlash faol"
+                      : "Cloud Sync Active"}
                   </span>
                 </div>
 
                 <p className="text-xs text-slate-300 font-sans leading-relaxed">
-                  {lang === "uz"
+                  {user.user_metadata?.is_local_bypass
+                    ? lang === "uz"
+                      ? "Siz email tasdiqlanishini kutmasdan barcha laboratoriya vositalari va AI Masala Yechuvchidan to'liq foydalanishingiz mumkin."
+                      : "You have instant student access without email verification delays. All labs and AI Problem Solver runs are fully functional."
+                    : lang === "uz"
                     ? "Siz tizimga muvaffaqiyatli ulangansiz. 'AI Masala Yechuvchi' bo'limida tahlil qilingan masalalar avtomatik ravishda profilingizga saqlanadi."
                     : "You are signed in with Supabase. Analyses generated in the AI Problem Solver will sync to your personal account history."}
                 </p>
@@ -328,7 +421,9 @@ export default function Header({
                   className="flex items-center justify-center gap-2 w-full py-2.5 rounded-xl border border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 font-mono text-xs font-semibold transition-colors"
                 >
                   <LogOut className="w-4 h-4" />
-                  <span>{lang === "uz" ? "Chiqish (Sign Out)" : "Sign Out"}</span>
+                  <span>
+                    {lang === "uz" ? "Chiqish (Sign Out)" : "Sign Out"}
+                  </span>
                 </button>
               </div>
             ) : (
@@ -390,7 +485,11 @@ export default function Header({
                       d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"
                     />
                   </svg>
-                  <span>{lang === "uz" ? "Google orqali kirish" : "Continue with Google"}</span>
+                  <span>
+                    {lang === "uz"
+                      ? "Google orqali kirish"
+                      : "Continue with Google"}
+                  </span>
                 </button>
 
                 {/* Divider */}
@@ -402,7 +501,10 @@ export default function Header({
                 </div>
 
                 {/* Email / Password Form */}
-                <form onSubmit={handleEmailAuth} className="flex flex-col gap-3">
+                <form
+                  onSubmit={handleEmailAuth}
+                  className="flex flex-col gap-3"
+                >
                   <div className="relative">
                     <Mail className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
                     <input
@@ -439,6 +541,20 @@ export default function Header({
                     ) : (
                       lang === "uz" ? "Hisob Ochish" : "Sign Up"
                     )}
+                  </button>
+
+                  {/* Instant Test Mode Bypass Button */}
+                  <button
+                    type="button"
+                    onClick={handleInstantBypass}
+                    className="flex items-center justify-center gap-1.5 w-full py-2 rounded-xl border border-dashed border-zinc-700 bg-zinc-900/50 hover:bg-zinc-800/80 text-[11px] font-mono text-slate-400 hover:text-emerald-300 transition-colors"
+                  >
+                    <Zap className="w-3.5 h-3.5 text-amber-400" />
+                    <span>
+                      {lang === "uz"
+                        ? "Email tasdiqisiz tezkor kirish (Instant Access)"
+                        : "Instant Student Access (No email wait)"}
+                    </span>
                   </button>
                 </form>
 
