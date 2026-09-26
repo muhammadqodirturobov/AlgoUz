@@ -5,13 +5,14 @@ import Header from "@/components/Header";
 import SortingVisualizer from "@/components/SortingVisualizer";
 import PathfindingVisualizer from "@/components/PathfindingVisualizer";
 import GradientDescentVisualizer from "@/components/GradientDescentVisualizer";
+import ProblemExplainer from "@/components/ProblemExplainer";
 import { I18nProvider, useI18n } from "@/lib/I18nProvider";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
-type Tab = "sorting" | "pathfinding" | "ml";
+type Tab = "sorting" | "pathfinding" | "ml" | "aiSolver";
 
 type CategoryKey =
   | "sorting"
@@ -22,9 +23,10 @@ type CategoryKey =
   | "dataStructures";
 
 const TAB_DEFS: { id: Tab; en: string; uz: string; badge?: string }[] = [
-  { id: "sorting",      en: "Sorting",          uz: "Saralash"          },
-  { id: "pathfinding",  en: "Pathfinding",      uz: "Yo'l topish"       },
-  { id: "ml",           en: "Machine Learning", uz: "Mashina o'rganishi" },
+  { id: "sorting",      en: "Sorting",           uz: "Saralash"           },
+  { id: "pathfinding",  en: "Pathfinding",       uz: "Yo'l topish"        },
+  { id: "ml",           en: "Machine Learning",  uz: "Mashina o'rganishi" },
+  { id: "aiSolver",     en: "AI Problem Solver", uz: "AI Masala Yechuvchi" },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -37,7 +39,7 @@ function PageContent() {
   const [activeTab, setActiveTab] = useState<Tab>("sorting");
 
   // Header category dropdown is kept for future visualizers;
-  // selecting sorting/graph/ml also switches the active tab.
+  // selecting sorting/graph/ml/dp also switches the active tab.
   const [selectedCategory, setSelectedCategory] =
     useState<CategoryKey>("sorting");
 
@@ -46,6 +48,7 @@ function PageContent() {
     if (cat === "sorting") setActiveTab("sorting");
     if (cat === "graph")   setActiveTab("pathfinding");
     if (cat === "ml")      setActiveTab("ml");
+    if (cat === "dp" || cat === "searching") setActiveTab("aiSolver");
   };
 
   return (
@@ -62,7 +65,7 @@ function PageContent() {
           <nav
             role="tablist"
             aria-label={lang === "uz" ? "Vizualizator bo'limlari" : "Visualizer tabs"}
-            className="inline-flex gap-1 p-1 rounded-xl bg-zinc-900 border border-zinc-800"
+            className="inline-flex gap-1 p-1 rounded-xl bg-zinc-900 border border-zinc-800 flex-wrap"
           >
             {TAB_DEFS.map(({ id, en, uz }) => {
               const isActive = activeTab === id;
@@ -97,6 +100,8 @@ function PageContent() {
           <PathfindingVisualizer />
         ) : activeTab === "ml" ? (
           <GradientDescentVisualizer />
+        ) : activeTab === "aiSolver" ? (
+          <ProblemExplainer />
         ) : (
           /* Future tabs */
           <div className="w-full mx-auto flex items-center justify-center min-h-[360px] rounded-2xl border border-zinc-800 bg-zinc-900/50">
