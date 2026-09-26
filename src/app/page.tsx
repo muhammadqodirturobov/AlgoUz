@@ -56,13 +56,13 @@ function PageContent() {
         onSelectCategory={handleCategorySelect}
       />
 
-      <main className="flex-1 px-4 py-6 sm:px-8">
+      <main className="flex-1 px-4 py-6 sm:px-8 w-full max-w-[1536px] mx-auto">
         {/* ── Tab bar ────────────────────────────────────────────────── */}
-        <div className="w-full max-w-5xl mx-auto mb-7">
+        <div className="w-full mb-7">
           <nav
             role="tablist"
             aria-label={lang === "uz" ? "Vizualizator bo'limlari" : "Visualizer tabs"}
-            className="inline-flex gap-1 p-1 rounded-xl bg-slate-900 border border-slate-800"
+            className="inline-flex gap-1 p-1 rounded-xl bg-zinc-900 border border-zinc-800"
           >
             {TAB_DEFS.map(({ id, en, uz }) => {
               const isActive = activeTab === id;
@@ -73,11 +73,11 @@ function PageContent() {
                   aria-selected={isActive}
                   onClick={() => setActiveTab(id)}
                   className={`
-                    px-6 py-2 rounded-lg text-sm font-semibold transition-all duration-150
+                    px-5 py-2 rounded-lg text-xs sm:text-sm font-mono font-semibold transition-all duration-150
                     focus:outline-none focus:ring-2 focus:ring-indigo-500/50
                     ${isActive
                       ? "bg-indigo-600 text-white shadow-lg shadow-indigo-900/40"
-                      : "text-slate-400 hover:text-white hover:bg-slate-800"}
+                      : "text-slate-400 hover:text-white hover:bg-zinc-800"}
                   `}
                 >
                   {lang === "uz" ? uz : en}
@@ -87,7 +87,7 @@ function PageContent() {
           </nav>
 
           {/* Thin accent line below active tab area */}
-          <div className="mt-3 border-b border-slate-800" />
+          <div className="mt-3 border-b border-zinc-800" />
         </div>
 
         {/* ── Active visualizer ──────────────────────────────────────── */}
@@ -99,8 +99,8 @@ function PageContent() {
           <GradientDescentVisualizer />
         ) : (
           /* Future tabs */
-          <div className="w-full max-w-5xl mx-auto flex items-center justify-center min-h-[360px] rounded-2xl border border-slate-800 bg-slate-900/50">
-            <p className="text-slate-500 text-sm">
+          <div className="w-full mx-auto flex items-center justify-center min-h-[360px] rounded-2xl border border-zinc-800 bg-zinc-900/50">
+            <p className="text-slate-500 text-sm font-mono">
               {lang === "uz" ? "Tez orada…" : "Coming soon…"}
             </p>
           </div>
