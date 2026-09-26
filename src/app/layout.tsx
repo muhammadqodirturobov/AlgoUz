@@ -12,6 +12,9 @@ export const metadata: Metadata = {
   title: "AlgoUZ — Algorithm & ML Visualizer",
   description:
     "Interactive algorithm and machine learning visualizations in English and Uzbek.",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
