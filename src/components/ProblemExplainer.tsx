@@ -21,6 +21,8 @@ import {
   BookmarkCheck,
   History,
   Trash2,
+  Bot,
+  Zap,
 } from "lucide-react";
 import type { User } from "@supabase/supabase-js";
 import { useI18n } from "@/lib/I18nProvider";
@@ -28,21 +30,35 @@ import { supabase, subscribeToAuth } from "@/lib/supabaseClient";
 
 export interface StepExplanation {
   stepNumber: number;
-  titleUz: string;
-  titleEn: string;
-  explanationUz: string;
-  explanationEn: string;
+  descriptionUz?: string;
+  descriptionEn?: string;
   stateSnapshot: string;
+  highlightedLine?: number;
+  titleUz?: string;
+  titleEn?: string;
+  explanationUz?: string;
+  explanationEn?: string;
   activeLine?: number;
 }
 
 export interface ProblemAnalysisResponse {
-  algorithmName: string;
-  algorithmCategory: string;
-  approachSummaryUz: string;
-  approachSummaryEn: string;
+  title: string;
+  detectedAlgorithm?: string;
+  timeComplexity?: string;
+  spaceComplexity?: string;
+  complexityExplanationUz?: string;
+  complexityExplanationEn?: string;
   steps: StepExplanation[];
-  complexity: {
+  referenceSolutionCpp?: string;
+  referenceSolutionPython?: string;
+  provider?: "gemini-live" | "algo-engine-offline";
+  note?: string;
+  // Aliases for compatibility
+  algorithmName?: string;
+  algorithmCategory?: string;
+  approachSummaryUz?: string;
+  approachSummaryEn?: string;
+  complexity?: {
     timeWorst: string;
     timeAverage: string;
     space: string;
@@ -51,7 +67,7 @@ export interface ProblemAnalysisResponse {
     breakdownUz: string;
     breakdownEn: string;
   };
-  referenceCode: {
+  referenceCode?: {
     python: string;
     cpp: string;
   };
@@ -67,48 +83,42 @@ interface SavedProblemItem {
 
 const PRESET_EXAMPLES = [
   {
-    title: "Two Sum: Pair with Given Target",
+    title: "Maximum Subarray (Kadane's Algorithm)",
     mode: "problem" as const,
     content:
-      "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target. You may assume that each input would have exactly one solution, and you may not use the same element twice.",
+      "Given an integer array nums, find the subarray with the largest sum, and return its sum. Solve in optimal O(N) linear time using Kadane's Algorithm or Dynamic Programming.",
+    testCase: "nums = [-2, 1, -3, 4, -1, 2, 1, -5, 4]",
+  },
+  {
+    title: "Two Sum: Target Pair Finder",
+    mode: "problem" as const,
+    content:
+      "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target. Each input has exactly one solution in O(N) time.",
     testCase: "nums = [2, 7, 11, 15], target = 9",
   },
   {
     title: "Binary Search on Sorted Range",
     mode: "problem" as const,
     content:
-      "Given an array of integers nums sorted in ascending order, and an integer target, write a function to search target in nums. If target exists, return its index. Otherwise, return -1 in O(log n) runtime.",
+      "Given an array of integers nums sorted in ascending order, and an integer target, write a function to search target in nums. Return its index or -1 in O(log n) runtime.",
     testCase: "nums = [-1, 0, 3, 5, 9, 12], target = 9",
-  },
-  {
-    title: "Reverse Array In-Place",
-    mode: "code" as const,
-    content: `void reverseArray(vector<int>& arr) {
-    int left = 0, right = arr.size() - 1;
-    while (left < right) {
-        swap(arr[left], arr[right]);
-        left++;
-        right--;
-    }
-}`,
-    testCase: "arr = [1, 2, 3, 4, 5]",
   },
 ];
 
 export default function ProblemExplainer() {
   const { lang } = useI18n();
 
-  // Current user state from Supabase
+  // Current user state
   const [user, setUser] = useState<User | null>(null);
 
   // Mode and form states
   const [mode, setMode] = useState<"problem" | "code">("problem");
-  const [title, setTitle] = useState<string>("Two Sum: Target Pair Finder");
+  const [title, setTitle] = useState<string>("Maximum Subarray (Kadane's Algorithm)");
   const [content, setContent] = useState<string>(
-    "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target."
+    "Given an integer array nums, find the subarray with the largest sum, and return its sum. Solve in optimal O(N) linear time using Kadane's Algorithm."
   );
   const [testCase, setTestCase] = useState<string>(
-    "nums = [2, 7, 11, 15], target = 9"
+    "nums = [-2, 1, -3, 4, -1, 2, 1, -5, 4]"
   );
 
   // Analysis Result and UI states
@@ -193,6 +203,15 @@ export default function ProblemExplainer() {
     setIsSaved(false);
   };
 
+  // 1-Click Olympiad Task Loader (Two Sum / Maximum Subarray toggle)
+  const handleLoadSampleOlympiad = () => {
+    if (title.includes("Maximum Subarray")) {
+      handleApplyPreset(PRESET_EXAMPLES[1]); // Two Sum
+    } else {
+      handleApplyPreset(PRESET_EXAMPLES[0]); // Maximum Subarray
+    }
+  };
+
   const handleAnalyze = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!title.trim() && !content.trim()) {
@@ -237,7 +256,7 @@ export default function ProblemExplainer() {
 
     const newItem: SavedProblemItem = {
       id: `${Date.now()}`,
-      title: title || result.algorithmName,
+      title: title || result.title || result.detectedAlgorithm || "Problem Explanation",
       mode,
       createdAt: new Date().toISOString(),
       analysis: result,
@@ -245,7 +264,10 @@ export default function ProblemExplainer() {
 
     // 1. Save to LocalStorage
     try {
-      const updated = [newItem, ...savedHistory.filter((i) => i.title !== newItem.title)].slice(0, 20);
+      const updated = [
+        newItem,
+        ...savedHistory.filter((i) => i.title !== newItem.title),
+      ].slice(0, 20);
       setSavedHistory(updated);
       localStorage.setItem("algouz_saved_problems", JSON.stringify(updated));
     } catch {
@@ -262,7 +284,7 @@ export default function ProblemExplainer() {
             mode: newItem.mode,
             content: content,
             test_case: testCase,
-            algorithm_name: result.algorithmName,
+            algorithm_name: result.detectedAlgorithm || result.algorithmName,
             analysis_json: result,
           },
         ]);
@@ -294,24 +316,25 @@ export default function ProblemExplainer() {
     }
   };
 
+  const activeReferenceCode =
+    activeCodeTab === "python"
+      ? result?.referenceSolutionPython || result?.referenceCode?.python || ""
+      : result?.referenceSolutionCpp || result?.referenceCode?.cpp || "";
+
   const handleCopyCode = () => {
-    if (!result) return;
-    const code =
-      activeCodeTab === "python"
-        ? result.referenceCode.python
-        : result.referenceCode.cpp;
-    navigator.clipboard.writeText(code);
+    if (!activeReferenceCode) return;
+    navigator.clipboard.writeText(activeReferenceCode);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2000);
   };
 
-  const currentStep = result?.steps[activeStepIdx];
+  const currentStep = result?.steps?.[activeStepIdx];
+  const totalSteps = result?.steps?.length || 0;
+  const currentHighlightLine =
+    currentStep?.highlightedLine ?? currentStep?.activeLine;
 
   return (
-    <div
-      suppressHydrationWarning
-      className="w-full flex flex-col gap-8"
-    >
+    <div suppressHydrationWarning className="w-full flex flex-col gap-8">
       {/* ── Top Header Banner ────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 p-5 rounded-2xl bg-zinc-900/70 border border-zinc-800 shadow-xl">
         <div className="flex items-center gap-3.5">
@@ -320,21 +343,39 @@ export default function ProblemExplainer() {
           </div>
           <div>
             <h2 className="text-base sm:text-lg font-bold text-white flex items-center gap-2">
-              <span>{lang === "uz" ? "AI Masala Tahlilchisi" : "AI Problem Solver & Explainer"}</span>
-              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
-                PRO CS LAB
+              <span>
+                {lang === "uz"
+                  ? "AI Masala Tahlilchisi"
+                  : "AI Problem Solver & Explainer"}
+              </span>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 flex items-center gap-1">
+                <Bot className="w-3 h-3 text-cyan-400" />
+                GEMINI 2.5 FLASH
               </span>
             </h2>
             <p className="text-xs text-slate-400 font-sans">
               {lang === "uz"
-                ? "Olimpiada masalalari yoki C++/Python kodlaringizni qadam-baqam vizualizatsiya qiling"
+                ? "Olimpiada masalalari yoki kodlaringizni qadam-baqam tahlil qiling va C++/Python yechimlarini oling"
                 : "Submit CP/Olympiad tasks or code snippets to decompose execution into an interactive timeline"}
             </p>
           </div>
         </div>
 
-        {/* Action Controls: Presets and History Toggle */}
+        {/* Action Controls: 1-Click Sample & History Toggle */}
         <div className="flex items-center gap-2.5 flex-wrap">
+          {/* Signature 1-Click Quick-Load Button */}
+          <button
+            onClick={handleLoadSampleOlympiad}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-xs font-mono font-medium text-amber-300 transition-all shadow-sm"
+          >
+            <Zap className="w-3.5 h-3.5 text-amber-400" />
+            <span>
+              {lang === "uz"
+                ? "Namunaviy Masala Yuklash (Two Sum / Maximum Subarray)"
+                : "Load Sample Olympiad Task (Two Sum / Maximum Subarray)"}
+            </span>
+          </button>
+
           {savedHistory.length > 0 && (
             <button
               onClick={() => setShowHistory((h) => !h)}
@@ -347,21 +388,6 @@ export default function ProblemExplainer() {
               </span>
             </button>
           )}
-
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs font-mono text-slate-500">
-              {lang === "uz" ? "Namunalar:" : "Presets:"}
-            </span>
-            {PRESET_EXAMPLES.map((ex, idx) => (
-              <button
-                key={idx}
-                onClick={() => handleApplyPreset(ex)}
-                className="px-2.5 py-1 rounded-lg text-[11px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-500 transition-colors"
-              >
-                {idx === 0 ? "Two Sum" : idx === 1 ? "Binary Search" : "Reverse"}
-              </button>
-            ))}
-          </div>
         </div>
       </div>
 
@@ -371,7 +397,9 @@ export default function ProblemExplainer() {
           <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
             <span className="text-xs font-mono font-semibold uppercase text-slate-300 flex items-center gap-2">
               <History className="w-4 h-4 text-indigo-400" />
-              {lang === "uz" ? "Saqlangan Masalalar Tarixi" : "Saved Problem History"}
+              {lang === "uz"
+                ? "Saqlangan Masalalar Tarixi"
+                : "Saved Problem History"}
             </span>
             <button
               onClick={() => setShowHistory(false)}
@@ -393,7 +421,9 @@ export default function ProblemExplainer() {
                     {item.title}
                   </span>
                   <span className="text-[10px] font-mono text-indigo-400">
-                    {item.analysis.algorithmName.split("(")[0]}
+                    {item.analysis.detectedAlgorithm ||
+                      item.analysis.algorithmName ||
+                      "Algorithm"}
                   </span>
                 </div>
                 <button
@@ -429,7 +459,9 @@ export default function ProblemExplainer() {
                 }`}
               >
                 <FileText className="w-3.5 h-3.5" />
-                <span>{lang === "uz" ? "Masala Matni" : "Problem Statement"}</span>
+                <span>
+                  {lang === "uz" ? "Masala Matni" : "Problem Statement"}
+                </span>
               </button>
 
               <button
@@ -442,7 +474,27 @@ export default function ProblemExplainer() {
                 }`}
               >
                 <Code2 className="w-3.5 h-3.5" />
-                <span>{lang === "uz" ? "Mening Kodim" : "My Code Snippet"}</span>
+                <span>
+                  {lang === "uz" ? "Mening Kodim" : "My Code Snippet"}
+                </span>
+              </button>
+            </div>
+
+            {/* Presets shortcut pills */}
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => handleApplyPreset(PRESET_EXAMPLES[0])}
+                className="px-2 py-0.5 rounded text-[10px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-500 transition-colors"
+              >
+                Kadane
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApplyPreset(PRESET_EXAMPLES[1])}
+                className="px-2 py-0.5 rounded text-[10px] font-mono border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-500 transition-colors"
+              >
+                Two Sum
               </button>
             </div>
           </div>
@@ -456,7 +508,7 @@ export default function ProblemExplainer() {
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Subarray Sum Equals K"
+              placeholder="e.g. Maximum Subarray Sum"
               className="px-3.5 py-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
             />
           </div>
@@ -501,7 +553,7 @@ export default function ProblemExplainer() {
               type="text"
               value={testCase}
               onChange={(e) => setTestCase(e.target.value)}
-              placeholder="e.g. nums = [2, 7, 11, 15], target = 9"
+              placeholder="e.g. nums = [-2, 1, -3, 4, -1, 2, 1, -5, 4]"
               className="px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs font-mono text-slate-200 placeholder:text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
             />
           </div>
@@ -524,8 +576,8 @@ export default function ProblemExplainer() {
                 <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
                 <span>
                   {lang === "uz"
-                    ? "Algoritm Tahlil Qilinmoqda..."
-                    : "Analyzing Algorithm & Simulating Steps..."}
+                    ? "Gemini AI & Algoritm Tahlil Qilinmoqda..."
+                    : "Querying Gemini API & Simulating Execution..."}
                 </span>
               </>
             ) : (
@@ -544,45 +596,57 @@ export default function ProblemExplainer() {
         {/* Right Info / Quick Guide (lg:col-span-6) */}
         <div className="lg:col-span-6 flex flex-col gap-4">
           <div className="p-5 rounded-2xl bg-zinc-900/50 border border-zinc-800 shadow-lg flex flex-col gap-3.5">
-            <div className="flex items-center gap-2 text-indigo-400">
-              <Cpu className="w-4 h-4" />
-              <h3 className="text-xs font-mono font-semibold uppercase text-slate-200">
-                {lang === "uz" ? "AI Explainer & Bulutli Xotira" : "AI Explainer & Cloud Sync"}
-              </h3>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-indigo-400">
+                <Cpu className="w-4 h-4" />
+                <h3 className="text-xs font-mono font-semibold uppercase text-slate-200">
+                  {lang === "uz"
+                    ? "Gemini API & Algoritmik Tahlil"
+                    : "Gemini Intelligence & Algorithmic Engine"}
+                </h3>
+              </div>
+              <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                Live Ready
+              </span>
             </div>
+
             <p className="text-xs text-slate-300 leading-relaxed font-sans">
               {lang === "uz"
-                ? "Tizim masalani O(N) murakkablik qonuniyatlariga ko'ra dekompozitsiya qiladi. Natijada sizga aniq bosqichma-bosqich diskret holatlar (State Snapshots), Big-O asimptotik bahosi va toza Python hamda C++ yechimlari taqdim etiladi. Tizimga kirsangiz, tahlillar Supabase bulutida saqlanadi."
-                : "The system decomposes the problem into discrete step snapshots, tracks variables and memory pointers, analyzes asymptotic Big-O runtime, and provides clean reference implementations. Authenticated students can save explanations to Supabase."}
+                ? "Tizim Google Gemini 2.5 Flash intellekti va AlgoUZ CS Laboratory dvigateliga ulangan. Kiritilgan masalalar avtomatik ravishda diskret ijro qadamlariga (State Snapshots) ajratiladi, asimptotik Big-O vaqti hisoblanadi va sinxronlashtirilgan C++/Python kodlari taqdim etiladi."
+                : "Powered by Google Gemini 2.5 Flash structured output and AlgoUZ CS Laboratory simulation. Submissions are decomposed into discrete execution snapshots with Big-O complexity bounds and synchronized dual-language reference solutions."}
             </p>
 
             <div className="grid grid-cols-2 gap-2.5 pt-2">
               <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col gap-1">
                 <span className="text-[10px] font-mono text-cyan-400 uppercase font-semibold">
-                  Step Timeline
+                  Step Scrubber
                 </span>
                 <span className="text-xs text-slate-400">
-                  {lang === "uz" ? "1..N qadamlar interaktiv boshqaruvi" : "Interactive 1..N step execution simulation"}
+                  {lang === "uz"
+                    ? "Qadamlar va o'zgaruvchilar holati"
+                    : "Interactive progress slider with live state"}
                 </span>
               </div>
               <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col gap-1">
                 <span className="text-[10px] font-mono text-amber-400 uppercase font-semibold">
-                  Supabase Ready
+                  Dual Solutions
                 </span>
                 <span className="text-xs text-slate-400">
-                  {lang === "uz" ? "user_problems jadvaliga sinxronizatsiya" : "Syncs to user_problems with offline fallback"}
+                  {lang === "uz"
+                    ? "Sinxron C++ va Python yechimlari"
+                    : "Synchronized C++ & Python reference tabs"}
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Quick Start Tip */}
+          {/* Quick Tip */}
           <div className="p-4 rounded-xl border border-dashed border-zinc-800 bg-zinc-950/60 flex items-start gap-3">
             <HelpCircle className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
             <p className="text-xs text-slate-400 font-mono leading-relaxed">
               {lang === "uz"
-                ? "Maslahat: Yuqoridagi 'Two Sum' yoki 'Binary Search' namunalaridan birini tanlab, darhol tahlil natijasini ko'rishingiz mumkin."
-                : "Tip: Select one of the presets above (e.g. 'Two Sum') to instantly generate a step simulation without manual typing."}
+                ? "Maslahat: Yuqoridagi 'Namunaviy Masala Yuklash' tugmasini bosing va bitta klikda Kadane yoki Two Sum masalasini to'liq tekshiring."
+                : "Tip: Click the 'Load Sample Olympiad Task' button above to test the entire pipeline with Kadane's Algorithm or Two Sum in one click."}
             </p>
           </div>
         </div>
@@ -597,17 +661,28 @@ export default function ProblemExplainer() {
               <div className="flex items-center gap-2">
                 <Activity className="w-4 h-4 text-cyan-400" />
                 <span className="text-xs font-mono uppercase tracking-wider text-slate-400">
-                  {lang === "uz" ? "Aniqlangan Algoritm:" : "Identified Algorithm:"}
+                  {lang === "uz"
+                    ? "Aniqlangan Algoritm:"
+                    : "Identified Algorithm:"}
                 </span>
                 <span className="text-sm font-bold font-mono text-cyan-300">
-                  {result.algorithmName}
+                  {result.detectedAlgorithm ||
+                    result.algorithmName ||
+                    "Algorithmic Solution"}
                 </span>
               </div>
 
               <div className="flex items-center gap-2.5">
-                <span className="text-[11px] font-mono px-3 py-1 rounded-full bg-indigo-600/30 text-indigo-300 border border-indigo-500/40">
-                  {result.algorithmCategory}
-                </span>
+                {result.provider === "gemini-live" ? (
+                  <span className="text-[11px] font-mono px-3 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    Gemini 2.5 Flash Live
+                  </span>
+                ) : (
+                  <span className="text-[11px] font-mono px-3 py-1 rounded-full bg-indigo-600/30 text-indigo-300 border border-indigo-500/40">
+                    CS Lab Engine
+                  </span>
+                )}
 
                 {/* Save Explanation Button */}
                 <button
@@ -624,7 +699,9 @@ export default function ProblemExplainer() {
                   ) : (
                     <>
                       <Bookmark className="w-3.5 h-3.5 text-amber-400" />
-                      <span>{lang === "uz" ? "Saqlash" : "Save Explanation"}</span>
+                      <span>
+                        {lang === "uz" ? "Saqlash" : "Save Explanation"}
+                      </span>
                     </>
                   )}
                 </button>
@@ -633,18 +710,26 @@ export default function ProblemExplainer() {
 
             <p className="text-sm text-slate-200 leading-relaxed font-sans">
               {lang === "uz"
-                ? result.approachSummaryUz
-                : result.approachSummaryEn}
+                ? result.complexityExplanationUz || result.approachSummaryUz
+                : result.complexityExplanationEn || result.approachSummaryEn}
             </p>
+
+            {result.note && (
+              <p className="text-[11px] font-mono text-slate-500 italic">
+                {result.note}
+              </p>
+            )}
           </div>
 
-          {/* Multi-Stage Interactive Execution Timeline */}
+          {/* Multi-Stage Interactive Execution Timeline with Slider */}
           <div className="flex flex-col gap-4 p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 shadow-xl">
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800 pb-3">
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4 text-amber-400" />
                 <span className="text-xs font-mono font-semibold uppercase text-slate-200">
-                  {lang === "uz" ? "Ijro Vaqt Shkalasi (Execution Timeline)" : "Execution Step Simulation"}
+                  {lang === "uz"
+                    ? "Ijro Vaqt Shkalasi (Interactive Execution Slider)"
+                    : "Interactive Step-by-Step Progress Simulation"}
                 </span>
               </div>
 
@@ -657,13 +742,13 @@ export default function ProblemExplainer() {
                   <ChevronLeft className="w-4 h-4" />
                 </button>
                 <span className="text-xs font-mono font-bold text-amber-400 tabular-nums">
-                  {activeStepIdx + 1} / {result.steps.length}
+                  {activeStepIdx + 1} / {totalSteps}
                 </span>
                 <button
                   onClick={() =>
-                    setActiveStepIdx((p) => Math.min(result.steps.length - 1, p + 1))
+                    setActiveStepIdx((p) => Math.min(totalSteps - 1, p + 1))
                   }
-                  disabled={activeStepIdx === result.steps.length - 1}
+                  disabled={activeStepIdx === totalSteps - 1}
                   className="p-1.5 rounded-lg border border-zinc-700 bg-zinc-800 text-slate-300 hover:text-white hover:border-zinc-600 transition-colors disabled:opacity-40"
                 >
                   <ChevronRight className="w-4 h-4" />
@@ -671,7 +756,28 @@ export default function ProblemExplainer() {
               </div>
             </div>
 
-            {/* Step Bubbles Timeline Scrubber */}
+            {/* Interactive Progress Slider Bar */}
+            {totalSteps > 1 && (
+              <div className="flex flex-col gap-1.5 px-1 py-1">
+                <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
+                  <span>Start (Step 1)</span>
+                  <span className="text-amber-400 font-semibold">
+                    Progress: {Math.round(((activeStepIdx + 1) / totalSteps) * 100)}%
+                  </span>
+                  <span>End (Step {totalSteps})</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={totalSteps - 1}
+                  value={activeStepIdx}
+                  onChange={(e) => setActiveStepIdx(Number(e.target.value))}
+                  className="w-full h-2 rounded-lg bg-zinc-800 accent-amber-400 cursor-pointer"
+                />
+              </div>
+            )}
+
+            {/* Step Bubbles Timeline */}
             <div className="flex items-center gap-2 overflow-x-auto pb-2 select-none">
               {result.steps.map((st, idx) => {
                 const isActive = idx === activeStepIdx;
@@ -702,25 +808,38 @@ export default function ProblemExplainer() {
                   <h4 className="text-sm font-mono font-bold text-white flex items-center gap-2">
                     <span className="w-2 h-2 rounded-full bg-amber-400" />
                     <span>
-                      {lang === "uz" ? currentStep.titleUz : currentStep.titleEn}
+                      {lang === "uz"
+                        ? currentStep.titleUz ||
+                          currentStep.descriptionUz ||
+                          `Qadam ${currentStep.stepNumber}`
+                        : currentStep.titleEn ||
+                          currentStep.descriptionEn ||
+                          `Step ${currentStep.stepNumber}`}
                     </span>
                   </h4>
-                  <span className="text-[10px] font-mono text-slate-500">
-                    Step {currentStep.stepNumber}
-                  </span>
+                  <div className="flex items-center gap-2 text-[10px] font-mono text-slate-400">
+                    {currentHighlightLine !== undefined && (
+                      <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                        Line {currentHighlightLine}
+                      </span>
+                    )}
+                    <span>
+                      Step {currentStep.stepNumber} of {totalSteps}
+                    </span>
+                  </div>
                 </div>
 
                 <p className="text-xs sm:text-sm text-slate-200 leading-relaxed font-sans">
                   {lang === "uz"
-                    ? currentStep.explanationUz
-                    : currentStep.explanationEn}
+                    ? currentStep.descriptionUz || currentStep.explanationUz
+                    : currentStep.descriptionEn || currentStep.explanationEn}
                 </p>
 
                 {/* State Snapshot Card */}
                 {currentStep.stateSnapshot && (
                   <div className="p-3 rounded-lg bg-zinc-900 border border-zinc-800 font-mono text-xs text-cyan-300 flex items-center gap-2">
-                    <span className="text-[10px] uppercase text-slate-500 font-semibold">
-                      State:
+                    <span className="text-[10px] uppercase text-slate-500 font-semibold shrink-0">
+                      State Snapshot:
                     </span>
                     <span className="truncate">{currentStep.stateSnapshot}</span>
                   </div>
@@ -729,71 +848,84 @@ export default function ProblemExplainer() {
             )}
           </div>
 
-          {/* ── Side-by-side Complexity & Reference Code ─────────────────── */}
+          {/* ── Side-by-side Complexity & Synchronized Reference Code ───────── */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             {/* Complexity Breakdown (lg:col-span-5) */}
             <div className="lg:col-span-5 flex flex-col gap-4 p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 shadow-xl">
               <div className="flex items-center gap-2 border-b border-zinc-800 pb-3">
                 <Activity className="w-4 h-4 text-cyan-400" />
                 <h3 className="text-xs font-mono font-semibold uppercase text-slate-200">
-                  {lang === "uz" ? "Asimptotik Baho (Big-O)" : "Complexity Analysis"}
+                  {lang === "uz"
+                    ? "Asimptotik Baho (Big-O)"
+                    : "Complexity Analysis"}
                 </h3>
               </div>
 
-              {/* 3 Metric Badges */}
-              <div className="grid grid-cols-3 gap-2">
-                <div className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col">
-                  <span className="text-[10px] font-mono text-slate-500 uppercase">Worst</span>
-                  <span className="text-xs font-bold font-mono text-rose-400">
-                    {result.complexity.timeWorst}
+              {/* Metric Badges */}
+              <div className="grid grid-cols-2 gap-2.5">
+                <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col gap-0.5">
+                  <span className="text-[10px] font-mono text-slate-500 uppercase">
+                    Time Complexity
+                  </span>
+                  <span className="text-sm font-bold font-mono text-rose-400">
+                    {result.timeComplexity ||
+                      result.complexity?.timeWorst ||
+                      "O(N)"}
                   </span>
                 </div>
-                <div className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col">
-                  <span className="text-[10px] font-mono text-slate-500 uppercase">Average</span>
-                  <span className="text-xs font-bold font-mono text-amber-400">
-                    {result.complexity.timeAverage}
+                <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col gap-0.5">
+                  <span className="text-[10px] font-mono text-slate-500 uppercase">
+                    Space Complexity
                   </span>
-                </div>
-                <div className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-col">
-                  <span className="text-[10px] font-mono text-slate-500 uppercase">Space</span>
-                  <span className="text-xs font-bold font-mono text-cyan-400">
-                    {result.complexity.space}
+                  <span className="text-sm font-bold font-mono text-cyan-400">
+                    {result.spaceComplexity ||
+                      result.complexity?.space ||
+                      "O(1)"}
                   </span>
                 </div>
               </div>
 
               <p className="text-xs text-slate-300 leading-relaxed font-sans">
                 {lang === "uz"
-                  ? result.complexity.breakdownUz
-                  : result.complexity.breakdownEn}
+                  ? result.complexityExplanationUz ||
+                    result.complexity?.breakdownUz
+                  : result.complexityExplanationEn ||
+                    result.complexity?.breakdownEn}
               </p>
 
-              {/* Edge Cases */}
-              <div className="flex flex-col gap-1.5 pt-2 border-t border-zinc-800">
-                <span className="text-[11px] font-mono font-semibold text-slate-400 uppercase">
-                  {lang === "uz" ? "Chekka Holatlar (Edge Cases):" : "Critical Edge Cases:"}
-                </span>
-                <ul className="list-disc list-inside space-y-1 text-xs text-slate-300 font-sans">
-                  {(lang === "uz"
-                    ? result.complexity.edgeCasesUz
-                    : result.complexity.edgeCasesEn
-                  ).map((ec, idx) => (
-                    <li key={idx} className="leading-snug">
-                      {ec}
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              {/* Edge Cases if available */}
+              {(result.complexity?.edgeCasesUz ||
+                result.complexity?.edgeCasesEn) && (
+                <div className="flex flex-col gap-1.5 pt-2 border-t border-zinc-800">
+                  <span className="text-[11px] font-mono font-semibold text-slate-400 uppercase">
+                    {lang === "uz"
+                      ? "Chekka Holatlar (Edge Cases):"
+                      : "Critical Edge Cases:"}
+                  </span>
+                  <ul className="list-disc list-inside space-y-1 text-xs text-slate-300 font-sans">
+                    {(lang === "uz"
+                      ? result.complexity?.edgeCasesUz || []
+                      : result.complexity?.edgeCasesEn || []
+                    ).map((ec, idx) => (
+                      <li key={idx} className="leading-snug">
+                        {ec}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
 
-            {/* Reference Implementation (lg:col-span-7) */}
+            {/* Synchronized Reference Implementation (lg:col-span-7) */}
             <div className="lg:col-span-7 flex flex-col rounded-2xl bg-zinc-950 border border-zinc-800 shadow-xl overflow-hidden">
               {/* Code Header Bar */}
               <div className="flex items-center justify-between px-4 py-2.5 bg-zinc-900/90 border-b border-zinc-800">
                 <div className="flex items-center gap-2">
                   <Code2 className="w-4 h-4 text-indigo-400" />
                   <span className="text-xs font-mono text-slate-300 font-semibold">
-                    {lang === "uz" ? "Optimal Referens Yechim" : "Optimal Reference Implementation"}
+                    {lang === "uz"
+                      ? "Optimal Referens Yechim"
+                      : "Optimal Reference Implementation"}
                   </span>
                 </div>
 
@@ -801,6 +933,7 @@ export default function ProblemExplainer() {
                   {/* Language switch */}
                   <div className="inline-flex rounded-lg bg-zinc-950 border border-zinc-800 p-0.5">
                     <button
+                      type="button"
                       onClick={() => setActiveCodeTab("python")}
                       className={`px-2.5 py-1 rounded text-[10px] font-mono font-medium transition-all ${
                         activeCodeTab === "python"
@@ -811,6 +944,7 @@ export default function ProblemExplainer() {
                       Python
                     </button>
                     <button
+                      type="button"
                       onClick={() => setActiveCodeTab("cpp")}
                       className={`px-2.5 py-1 rounded text-[10px] font-mono font-medium transition-all ${
                         activeCodeTab === "cpp"
@@ -824,6 +958,7 @@ export default function ProblemExplainer() {
 
                   {/* Copy Button */}
                   <button
+                    type="button"
                     onClick={handleCopyCode}
                     className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-zinc-700 bg-zinc-800 text-[11px] font-mono text-slate-300 hover:text-white hover:border-zinc-500 transition-colors"
                   >
@@ -842,13 +977,38 @@ export default function ProblemExplainer() {
                 </div>
               </div>
 
-              {/* Code Pre Block */}
-              <div className="p-4 font-mono text-xs overflow-x-auto max-h-[380px] overflow-y-auto leading-relaxed text-indigo-200">
-                <pre>
-                  {activeCodeTab === "python"
-                    ? result.referenceCode.python
-                    : result.referenceCode.cpp}
-                </pre>
+              {/* Synchronized Line-Numbered Code Block */}
+              <div className="p-4 font-mono text-xs overflow-x-auto max-h-[380px] overflow-y-auto leading-relaxed">
+                <div className="w-full flex flex-col font-mono text-xs">
+                  {activeReferenceCode.split("\n").map((lineText, lineIdx) => {
+                    const lineNum = lineIdx + 1;
+                    const isCurrentLine = currentHighlightLine === lineNum;
+
+                    return (
+                      <div
+                        key={lineIdx}
+                        className={`flex items-start px-2 py-0.5 rounded transition-colors ${
+                          isCurrentLine
+                            ? "bg-indigo-500/25 border-l-2 border-indigo-400 text-indigo-200 font-semibold"
+                            : "text-slate-300 hover:bg-zinc-900/50"
+                        }`}
+                      >
+                        <span
+                          className={`w-7 shrink-0 text-right pr-3 select-none text-[11px] ${
+                            isCurrentLine
+                              ? "text-indigo-400 font-bold"
+                              : "text-zinc-600"
+                          }`}
+                        >
+                          {lineNum}
+                        </span>
+                        <span className="whitespace-pre overflow-x-visible">
+                          {lineText || " "}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
